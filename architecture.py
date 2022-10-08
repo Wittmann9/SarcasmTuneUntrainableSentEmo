@@ -1,13 +1,11 @@
 import torch, json, os
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer, seed_everything
-from torch.utils.data import DataLoader
 from transformers import AutoModel
-from transformers import AutoTokenizer
 from final_classifiers import FinalClassifier, LinearTwoLayersNet
 import torch.nn.functional as F
-from data_utils import SarcasmDataloader
-from data_utils import SarcasmDataset
+from data_utils import SarcasmDataloader, Word2VecPreprocessing
 from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score
+from word2vec_arch import CNN_Word2Vec
 
 class TransformerLightning(LightningModule):
     def __init__(self,
@@ -15,15 +13,17 @@ class TransformerLightning(LightningModule):
                  emotion_hidden_dim, emotion_middle_dim, emotion_output_dim,
                  sentiment_hidden_dim, sentiment_middle_dim, sentiment_output_dim,
                  transformer_middle_dim, transformer_output_dim,
+                 pretrained_embedding=None,
+                 freeze_embedding=False,
+                 vocab_size=None,
+                 w2v_embed_dim=300,
+                 filter_sizes=[3, 4, 5],
+                 num_filters=[100, 100, 100],
                  num_labels=2, lr=1e-3):
         super().__init__()
         self.lr = lr
         self.model_name = model_name
         self.transformer_model = AutoModel.from_pretrained(model_name)
-        self.final_classifier_model = FinalClassifier(
-            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim,
-            output_dim=num_labels
-        )
 
         self.transformer_hidden_transformed = LinearTwoLayersNet(
             input_dim=self.transformer_model.config.dim, middle_dim=transformer_middle_dim, output_dim=transformer_output_dim
@@ -33,6 +33,20 @@ class TransformerLightning(LightningModule):
         )
         self.sentiment_hidden_transformed = LinearTwoLayersNet(
             input_dim=sentiment_hidden_dim, middle_dim=sentiment_middle_dim, output_dim=sentiment_output_dim
+        )
+
+        self.cnn_word2vec = CNN_Word2Vec(
+            pretrained_embedding=pretrained_embedding,
+            freeze_embedding=freeze_embedding,
+            vocab_size=vocab_size,
+            embed_dim=w2v_embed_dim,
+            filter_sizes=filter_sizes,
+            num_filters=num_filters
+        )
+
+        self.final_classifier_model = FinalClassifier(
+            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim + self.cnn_word2vec.output_dim,
+            output_dim=num_labels
         )
 
 
@@ -49,16 +63,18 @@ class TransformerLightning(LightningModule):
             tokenized_texts=transformer_tokenized_texts
         )
 
-        # merge these vectors
         transformer_hidden_transformed = self.transformer_hidden_transformed(transformer_representations)
         emotion_hidden_transformed = self.emotion_hidden_transformed(batch_dict['emotion_hidden'])
         sentiment_hidden_transformed = self.sentiment_hidden_transformed(batch_dict['sentiment_hidden'])
+
+        cnn_word2vec_representation = self.cnn_word2vec(batch_dict['word_embedding_indexes'])
 
         merged_features = torch.cat(
             [
                 transformer_hidden_transformed,
                 emotion_hidden_transformed,
-                sentiment_hidden_transformed
+                sentiment_hidden_transformed,
+                cnn_word2vec_representation
             ],
             dim = 1
         )
@@ -119,15 +135,24 @@ class TransformerLightning(LightningModule):
 
 
 if __name__ == '__main__':
+    seed_everything(2)
 
     TRANSFORMER_PATH = ""
     TRAIN_DATA_PATH = ""
     TEST_DATA_PATH = ""
     SAVE_DIR = ""
+    WORD2VEC_LOADIR = ""
+    MAX_LEN = 10
 
     loader = SarcasmDataloader(transformer_model_path=TRANSFORMER_PATH)
-    train_dataloader = loader.get_dataloader(data_file_path=TRAIN_DATA_PATH, batch_size=32, shuffle=True)
-    test_dataloader = loader.get_dataloader(data_file_path=TEST_DATA_PATH, batch_size=32, shuffle=False)
+    word2vec_processor = Word2VecPreprocessing()
+    word2vec_processor.load_from_dir(load_dir=WORD2VEC_LOADIR)
+    word2vec_processor.max_len = MAX_LEN
+
+    train_dataloader = loader.get_dataloader(data_file_path=TRAIN_DATA_PATH, batch_size=32, shuffle=True,
+                                             word2vec_processor=word2vec_processor)
+    test_dataloader = loader.get_dataloader(data_file_path=TEST_DATA_PATH, batch_size=32, shuffle=False,
+                                            word2vec_processor=word2vec_processor)
     # model
     model = TransformerLightning(
         model_name=TRANSFORMER_PATH,
@@ -142,7 +167,7 @@ if __name__ == '__main__':
         num_labels=2, lr=1e-3
     )
     # training
-    trainer = Trainer(default_root_dir=SAVE_DIR, accelerator='gpu', gpus=1, enable_checkpointing=False)
+    trainer = Trainer(default_root_dir=SAVE_DIR, accelerator='gpu', gpus=1, max_epochs=20, enable_checkpointing=False)
     trainer.fit(model, train_dataloader, test_dataloader)
 
     test_results = trainer.test(
