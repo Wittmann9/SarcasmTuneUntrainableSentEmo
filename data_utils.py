@@ -144,6 +144,8 @@ class SarcasmDataloader:
         )
         emotion_hidden = torch.Tensor([d['emotion_text_vector'] for d in batch_list])
         sentiment_hidden = torch.Tensor([d['sentiment_text_vector'] for d in batch_list])
+        emotion_label_distr = torch.Tensor([d['emotion_label_distr'] for d in batch_list])
+        sentiment_label_distr = torch.Tensor([d['sentiment_label_distr'] for d in batch_list])
         labels = torch.Tensor([d['label'] for d in batch_list]).long()
 
         word_embedding_indexes = torch.Tensor([d["word_embedding_indexes"] for d in batch_list]).long()
@@ -153,7 +155,9 @@ class SarcasmDataloader:
             "emotion_hidden": emotion_hidden,
             "sentiment_hidden": sentiment_hidden,
             "word_embedding_indexes": word_embedding_indexes,
-            "labels": labels
+            "labels": labels,
+            "emotion_label_distr": emotion_label_distr,
+            "sentiment_label_distr": sentiment_label_distr
         }
 
     def get_dataloader(self,

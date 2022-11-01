@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from data_utils import SarcasmDataloader, Word2VecPreprocessing
 from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score
 from word2vec_arch import CNN_Word2Vec
+from transformers import RobertaModel
 
 class TransformerLightning(LightningModule):
     def __init__(self,
@@ -17,16 +18,21 @@ class TransformerLightning(LightningModule):
                  freeze_embedding=False,
                  vocab_size=None,
                  w2v_embed_dim=300,
+                 labels_output_dim=8,
                  filter_sizes=[3, 4, 5],
                  num_filters=[100, 100, 100],
+                 milestones=[], gamma=1.0,
                  num_labels=2, lr=1e-3):
         super().__init__()
         self.lr = lr
+        self.milestones = milestones
+        self.gamma=gamma
+
         self.model_name = model_name
-        self.transformer_model = AutoModel.from_pretrained(model_name)
+        self.transformer_model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
 
         self.transformer_hidden_transformed = LinearTwoLayersNet(
-            input_dim=self.transformer_model.config.dim, middle_dim=transformer_middle_dim, output_dim=transformer_output_dim
+            input_dim=self.transformer_model.config.hidden_size, middle_dim=transformer_middle_dim, output_dim=transformer_output_dim
         )
         self.emotion_hidden_transformed = LinearTwoLayersNet(
             input_dim=emotion_hidden_dim, middle_dim=emotion_middle_dim, output_dim=emotion_output_dim
@@ -44,8 +50,10 @@ class TransformerLightning(LightningModule):
             num_filters=num_filters
         )
 
+        self.labels_transform = torch.nn.Sequential(torch.nn.Linear(2+28, labels_output_dim), torch.nn.ReLU())
+
         self.final_classifier_model = FinalClassifier(
-            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim + self.cnn_word2vec.output_dim,
+            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim + self.cnn_word2vec.output_dim + labels_output_dim,
             output_dim=num_labels
         )
 
@@ -54,7 +62,8 @@ class TransformerLightning(LightningModule):
     def get_transformer_text_representation(self, tokenized_texts):
         model_outputs = self.transformer_model(**tokenized_texts)
         return model_outputs.last_hidden_state[:,0,:]
-
+        return model_outputs.last_hidden_state[:,0,:]/4 + model_outputs.hidden_states[-2][:,0,:]/4 + model_outputs.hidden_states[-3][:,0,:]/4 + model_outputs.hidden_states[-4][:,0,:]/4
+ 
 
     def forward(self, batch_dict):
 
@@ -68,13 +77,18 @@ class TransformerLightning(LightningModule):
         sentiment_hidden_transformed = self.sentiment_hidden_transformed(batch_dict['sentiment_hidden'])
 
         cnn_word2vec_representation = self.cnn_word2vec(batch_dict['word_embedding_indexes'])
+        
+        labels_representation = self.labels_transform(torch.cat([batch_dict["sentiment_label_distr"],batch_dict["emotion_label_distr"]], dim=-1))
 
         merged_features = torch.cat(
             [
                 transformer_hidden_transformed,
                 emotion_hidden_transformed,
                 sentiment_hidden_transformed,
-                cnn_word2vec_representation
+                cnn_word2vec_representation,
+                labels_representation
+               # batch_dict["sentiment_label_distr"],
+               # batch_dict["emotion_label_distr"]
             ],
             dim = 1
         )
@@ -85,11 +99,14 @@ class TransformerLightning(LightningModule):
     def training_step(self, batch_dict, batch_idx):
         y_hat = self(batch_dict)
         loss = F.cross_entropy(y_hat, batch_dict['labels'])
+        self.log("train_loss", loss)
         return loss
 
     def configure_optimizers(self):
+      #  self.trainer.reset_train_dataloader(self)
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.milestones, gamma=self.gamma)
+        return [ optimizer],[ scheduler]
 
     def validation_step(self, batch_dict, batch_idx):
         # this is the validation loop
@@ -137,21 +154,28 @@ class TransformerLightning(LightningModule):
 if __name__ == '__main__':
     seed_everything(2)
 
-    TRANSFORMER_PATH = ""
-    TRAIN_DATA_PATH = ""
-    TEST_DATA_PATH = ""
-    SAVE_DIR = ""
-    WORD2VEC_LOADIR = ""
-    MAX_LEN = 10
+    TRANSFORMER_PATH = "/home/oxana/SarcasmFeatureExtractor/roberta_tuned"
+   # TRANSFORMER_PATH = 'roberta-base'
+    TRAIN_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/twitt_train_merged_without_NC.npy"
+    TEST_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/twitt_test_merged_without_NC.npy"
+    SAVE_DIR = "twitt_emb_roberta_20epoch_bs32_lr5_ml18"
+    WORD2VEC_LOADIR = "twitt_w2v_embs"
+    MAX_LEN = 18
+    MAX_EPOCHS = 20
+    LR = 1e-5
+    MILESTONES = [10]
+    GAMMA = 0.1
+    BS = 32
+
 
     loader = SarcasmDataloader(transformer_model_path=TRANSFORMER_PATH)
     word2vec_processor = Word2VecPreprocessing()
     word2vec_processor.load_from_dir(load_dir=WORD2VEC_LOADIR)
     word2vec_processor.max_len = MAX_LEN
 
-    train_dataloader = loader.get_dataloader(data_file_path=TRAIN_DATA_PATH, batch_size=32, shuffle=True,
+    train_dataloader = loader.get_dataloader(data_file_path=TRAIN_DATA_PATH, batch_size=BS, shuffle=True,
                                              word2vec_processor=word2vec_processor)
-    test_dataloader = loader.get_dataloader(data_file_path=TEST_DATA_PATH, batch_size=32, shuffle=False,
+    test_dataloader = loader.get_dataloader(data_file_path=TEST_DATA_PATH, batch_size=16, shuffle=False,
                                             word2vec_processor=word2vec_processor)
     # model
     model = TransformerLightning(
@@ -164,10 +188,25 @@ if __name__ == '__main__':
         sentiment_output_dim=128,
         transformer_middle_dim=264,
         transformer_output_dim=128,
-        num_labels=2, lr=1e-3
+        pretrained_embedding=torch.Tensor(word2vec_processor.embeddings),
+        freeze_embedding=False,
+        vocab_size=None,
+        w2v_embed_dim=300,
+        filter_sizes=[3, 4, 5],
+        num_filters=[16, 32, 64],
+        num_labels=2, lr=LR,
+        milestones=MILESTONES, gamma=GAMMA
     )
     # training
-    trainer = Trainer(default_root_dir=SAVE_DIR, accelerator='gpu', gpus=1, max_epochs=20, enable_checkpointing=False)
+    trainer = Trainer(default_root_dir=SAVE_DIR, accelerator='gpu', gpus=1, max_epochs=MAX_EPOCHS, enable_checkpointing=False)
+    
+   
+   # lr_finder = trainer.tuner.lr_find(model)
+   # new_lr = lr_finder.suggestion()
+
+    #print("new_lr: ", new_lr)
+   # model.hparams.lr = new_lr
+    
     trainer.fit(model, train_dataloader, test_dataloader)
 
     test_results = trainer.test(
