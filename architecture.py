@@ -11,7 +11,7 @@ class TransformerLightning(LightningModule):
     def __init__(self,
                  model_name,
                  emotion_hidden_dim, emotion_middle_dim, emotion_output_dim,
-                 sentiment_hidden_dim, sentiment_middle_dim, sentiment_output_dim,
+                 sentiment_hidden_dim, sentiment_middle_dim, sentiment_output_dim, average_embed_middle_dim, average_embed_output_dim,
                  transformer_middle_dim, transformer_output_dim,
                  pretrained_embedding=None,
                  freeze_embedding=False,
@@ -28,6 +28,10 @@ class TransformerLightning(LightningModule):
         self.transformer_hidden_transformed = LinearTwoLayersNet(
             input_dim=self.transformer_model.config.dim, middle_dim=transformer_middle_dim, output_dim=transformer_output_dim
         )
+        self.w2v_average_embeddings_transformed = LinearTwoLayersNet(
+            input_dim=w2v_embed_dim, middle_dim=average_embed_middle_dim, output_dim=average_embed_output_dim
+        )
+
         self.emotion_hidden_transformed = LinearTwoLayersNet(
             input_dim=emotion_hidden_dim, middle_dim=emotion_middle_dim, output_dim=emotion_output_dim
         )
@@ -45,7 +49,7 @@ class TransformerLightning(LightningModule):
         )
 
         self.final_classifier_model = FinalClassifier(
-            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim + self.cnn_word2vec.output_dim,
+            input_dim=transformer_output_dim + emotion_output_dim + sentiment_output_dim + self.cnn_word2vec.output_dim + average_embed_output_dim,
             output_dim=num_labels
         )
 
@@ -59,11 +63,14 @@ class TransformerLightning(LightningModule):
     def forward(self, batch_dict):
 
         transformer_tokenized_texts = batch_dict["transformer_tokenized_texts"]
+        average_w2v_embeddings = batch_dict['average_w2v_embeddings']
         transformer_representations = self.get_transformer_text_representation(
             tokenized_texts=transformer_tokenized_texts
         )
 
         transformer_hidden_transformed = self.transformer_hidden_transformed(transformer_representations)
+
+        average_w2v_embeddings_transformed = self.w2v_average_embeddings_transformed(average_w2v_embeddings)
         emotion_hidden_transformed = self.emotion_hidden_transformed(batch_dict['emotion_hidden'])
         sentiment_hidden_transformed = self.sentiment_hidden_transformed(batch_dict['sentiment_hidden'])
 
@@ -72,6 +79,7 @@ class TransformerLightning(LightningModule):
         merged_features = torch.cat(
             [
                 transformer_hidden_transformed,
+                average_w2v_embeddings_transformed,
                 emotion_hidden_transformed,
                 sentiment_hidden_transformed,
                 cnn_word2vec_representation
@@ -142,11 +150,13 @@ if __name__ == '__main__':
     TEST_DATA_PATH = ""
     SAVE_DIR = ""
     WORD2VEC_LOADIR = ""
+    W2V_FILE_PATH = ""
     MAX_LEN = 10
 
     loader = SarcasmDataloader(transformer_model_path=TRANSFORMER_PATH)
     word2vec_processor = Word2VecPreprocessing()
     word2vec_processor.load_from_dir(load_dir=WORD2VEC_LOADIR)
+    word2vec_processor.load_w2v_vocabulary(fname=W2V_FILE_PATH)
     word2vec_processor.max_len = MAX_LEN
 
     train_dataloader = loader.get_dataloader(data_file_path=TRAIN_DATA_PATH, batch_size=32, shuffle=True,
@@ -164,6 +174,8 @@ if __name__ == '__main__':
         sentiment_output_dim=128,
         transformer_middle_dim=264,
         transformer_output_dim=128,
+        average_embed_middle_dim = 128,
+        average_embed_output_dim = 64,
         num_labels=2, lr=1e-3
     )
     # training

@@ -19,6 +19,7 @@ class Word2VecPreprocessing:
             self.embeddings = embeddings
 
         self.max_len = max_len
+        self.w2v_voc = []
 
     def tokenize(self, text):
         return word_tokenize(text)
@@ -69,6 +70,27 @@ class Word2VecPreprocessing:
                 embeddings[self.word2idx[word]] = np.array(tokens[1:], dtype=np.float32)
         return embeddings
 
+
+    def get_average_w2v_embeddings(self, text):
+        tokens = self.tokenize(text)
+        tokens = [token for token in tokens if token in self.w2v_voc]
+        if len(tokens) == 0:
+            return self.embeddings[self.word2idx['<pad>']]
+
+        tokens_embeddings = [self.embeddings[self.word2idx[word]] for word in tokens]
+
+        return np.average(tokens_embeddings, axis = 0)
+
+
+    def load_w2v_vocabulary(self, fname):
+        fin = open(fname, 'r', encoding='utf-8', newline='\n', errors='ignore')
+        for line in tqdm(fin):
+            tokens = line.rstrip().split(' ')
+            word = tokens[0]
+            if word in self.word2idx:
+                self.w2v_voc.append(word)
+
+
     def save_embeddings_word2idx(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
@@ -111,6 +133,7 @@ class SarcasmDataset(Dataset):
 
     def __getitem__(self, item):
         text = self.data[item]['text']
+        average_w2v_embeddings = self.word2vec_processor.get_average_w2v_embeddings(text)
         emotion_text_vector = self.data[item]['emotion']['last_hidden'][0]
         sentiment_text_vector = self.data[item]['sentiment']['last_hidden'][0]
         emotion_label_distr = self.data[item]['emotion']['label_distr']
@@ -120,6 +143,7 @@ class SarcasmDataset(Dataset):
 
         return {
             'text': text,
+            'average_w2v_embeddings': average_w2v_embeddings,
             'emotion_text_vector': emotion_text_vector,
             'sentiment_text_vector': sentiment_text_vector,
             'emotion_label_distr': emotion_label_distr,
@@ -147,8 +171,9 @@ class SarcasmDataloader:
         labels = torch.Tensor([d['label'] for d in batch_list]).long()
 
         word_embedding_indexes = torch.Tensor([d["word_embedding_indexes"] for d in batch_list]).long()
-
+        average_w2v_embeddings = torch.Tensor([d['average_w2v_embeddings'] for d in batch_list])
         return {
+            'average_w2v_embeddings': average_w2v_embeddings,
             "transformer_tokenized_texts": transformer_tokenized_texts,
             "emotion_hidden": emotion_hidden,
             "sentiment_hidden": sentiment_hidden,
