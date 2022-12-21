@@ -156,11 +156,11 @@ if __name__ == '__main__':
 
     TRANSFORMER_PATH = "/home/oxana/SarcasmFeatureExtractor/roberta_tuned"
    # TRANSFORMER_PATH = 'roberta-base'
-    TRAIN_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/twitt_train_merged_without_NC.npy"
-    TEST_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/twitt_test_merged_without_NC.npy"
-    SAVE_DIR = "twitt_emb_roberta_20epoch_bs32_lr5_ml18"
-    WORD2VEC_LOADIR = "twitt_w2v_embs"
-    MAX_LEN = 18
+    TRAIN_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/v2_merged_without_NC.npy"
+    TEST_DATA_PATH = "/home/oxana/SarcasmFeatureExtractor/v2_test_merged_without_NC.npy"
+    SAVE_DIR = "v2_emb_roberta_20epoch_bs32_lr5_ml18"
+    WORD2VEC_LOADIR = "v2_w2v_embs"
+    MAX_LEN = 16
     MAX_EPOCHS = 20
     LR = 1e-5
     MILESTONES = [10]
