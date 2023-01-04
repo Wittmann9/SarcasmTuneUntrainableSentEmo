@@ -133,7 +133,7 @@ class SarcasmDataset(Dataset):
 
     def __getitem__(self, item):
         text = self.data[item]['text']
-        average_w2v_embeddings = self.word2vec_processor.get_average_w2v_embeddings(text)
+   #     average_w2v_embeddings = self.word2vec_processor.get_average_w2v_embeddings(text)
         emotion_text_vector = self.data[item]['emotion']['last_hidden'][0]
         sentiment_text_vector = self.data[item]['sentiment']['last_hidden'][0]
         emotion_label_distr = self.data[item]['emotion']['label_distr']
@@ -143,7 +143,7 @@ class SarcasmDataset(Dataset):
 
         return {
             'text': text,
-            'average_w2v_embeddings': average_w2v_embeddings,
+  #          'average_w2v_embeddings': average_w2v_embeddings,
             'emotion_text_vector': emotion_text_vector,
             'sentiment_text_vector': sentiment_text_vector,
             'emotion_label_distr': emotion_label_distr,
@@ -168,17 +168,21 @@ class SarcasmDataloader:
         )
         emotion_hidden = torch.Tensor([d['emotion_text_vector'] for d in batch_list])
         sentiment_hidden = torch.Tensor([d['sentiment_text_vector'] for d in batch_list])
+        emotion_label_distr = torch.Tensor([d['emotion_label_distr'] for d in batch_list])
+        sentiment_label_distr = torch.Tensor([d['sentiment_label_distr'] for d in batch_list])
         labels = torch.Tensor([d['label'] for d in batch_list]).long()
 
         word_embedding_indexes = torch.Tensor([d["word_embedding_indexes"] for d in batch_list]).long()
-        average_w2v_embeddings = torch.Tensor([d['average_w2v_embeddings'] for d in batch_list])
+ #       average_w2v_embeddings = torch.Tensor([d['average_w2v_embeddings'] for d in batch_list])
         return {
-            'average_w2v_embeddings': average_w2v_embeddings,
+#            'average_w2v_embeddings': average_w2v_embeddings,
             "transformer_tokenized_texts": transformer_tokenized_texts,
             "emotion_hidden": emotion_hidden,
             "sentiment_hidden": sentiment_hidden,
             "word_embedding_indexes": word_embedding_indexes,
-            "labels": labels
+            "labels": labels,
+            "emotion_label_distr": emotion_label_distr,
+            "sentiment_label_distr": sentiment_label_distr
         }
 
     def get_dataloader(self,
